@@ -1,0 +1,689 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  STUDENT
+  FACULTY
+  CLUB_ADMIN
+  MAINTENANCE
+  ADMIN
+}
+
+enum ComplaintStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum ComplaintCategory {
+  ACADEMIC
+  FACILITIES
+  SECURITY
+  HEALTH
+  SERVICES
+  OTHER
+}
+
+enum EventStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PUBLISHED
+  CANCELLED
+  COMPLETED
+}
+
+enum BookingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum NotificationType {
+  ASSIGNMENT_DUE
+  COMPLAINT_UPDATE
+  EVENT_REMINDER
+  BOOKING_UPDATE
+  SYSTEM
+}
+
+// ============================================================================
+// CORE USER MODELS
+// ============================================================================
+
+model User {
+  id                    String                  @id @default(cuid())
+  email                 String                  @unique
+  password              String                  // bcrypt hash, never returned in API
+  firstName             String
+  lastName              String
+  role                  UserRole
+  isActive              Boolean                 @default(true)
+  lastLoginAt           DateTime?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+
+  // Relations
+  studentProfile        StudentProfile?
+  facultyProfile        FacultyProfile?
+  clubMemberships       ClubMembership[]
+  enrollments           Enrollment[]
+  attendanceRecords     Attendance[]
+  submissions           Submission[]
+  assignments           Assignment[]            @relation("AssignmentCreatedBy")
+  complaints            Complaint[]             @relation("ComplaintCreatedBy")
+  complaintAssignees    Complaint[]             @relation("ComplaintAssignedTo")
+  complaintComments     ComplaintComment[]
+  complaintAttachments  ComplaintAttachment[]
+  bookings              Booking[]
+  notifications         Notification[]
+  conversations         Conversation[]
+  messages              Message[]
+  createdAuditLogs      AuditLog[]              @relation("AuditLogCreatedBy")
+  auditedNotifications  Notification[]          @relation("NotificationAuditLog")
+
+  @@index([role])
+  @@index([email])
+  @@index([isActive])
+}
+
+model StudentProfile {
+  id              String      @id @default(cuid())
+  userId          String      @unique
+  rollNumber      String      @unique
+  departmentId    String
+  currentSemester Int         @default(1)
+  cgpa            Float       @default(0.0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department      Department  @relation(fields: [departmentId], references: [id])
+
+  @@index([departmentId])
+  @@index([rollNumber])
+}
+
+model FacultyProfile {
+  id              String      @id @default(cuid())
+  userId          String      @unique
+  employeeId      String      @unique
+  departmentId    String
+  specialization  String?
+  officeLocation  String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department      Department  @relation(fields: [departmentId], references: [id])
+  classes         Class[]     @relation("ClassInstructor")
+
+  @@index([departmentId])
+  @@index([employeeId])
+}
+
+// ============================================================================
+// ORGANIZATIONAL MODELS
+// ============================================================================
+
+model Department {
+  id              String      @id @default(cuid())
+  name            String      @unique
+  code            String      @unique
+  description     String?
+  headName        String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  studentProfiles StudentProfile[]
+  facultyProfiles FacultyProfile[]
+  courses         Course[]
+
+  @@index([code])
+}
+
+model Course {
+  id              String      @id @default(cuid())
+  code            String
+  name            String
+  description     String?
+  credits         Int
+  departmentId    String
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  department      Department  @relation(fields: [departmentId], references: [id])
+  classes         Class[]
+
+  @@unique([code, departmentId])
+  @@index([departmentId])
+  @@index([code])
+}
+
+model Class {
+  id              String      @id @default(cuid())
+  courseId        String
+  section         String      // e.g., "A", "B", "Batch 2024-A"
+  semester        Int
+  instructorId    String
+  capacity        Int
+  currentEnrollment Int        @default(0)
+  room            String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  course          Course      @relation(fields: [courseId], references: [id])
+  instructor      FacultyProfile @relation("ClassInstructor", fields: [instructorId], references: [id])
+  enrollments     Enrollment[]
+  timetableEntries TimetableEntry[]
+  attendanceRecords Attendance[]
+  assignments     Assignment[]
+
+  @@unique([courseId, section, semester])
+  @@index([courseId])
+  @@index([instructorId])
+  @@index([semester])
+}
+
+// ============================================================================
+// ACADEMIC MODELS
+// ============================================================================
+
+model Enrollment {
+  id              String      @id @default(cuid())
+  studentId       String
+  classId         String
+  enrolledAt      DateTime    @default(now())
+  grade           String?     // A+, A, B+, etc.
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  student         User        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  class           Class       @relation(fields: [classId], references: [id])
+
+  @@unique([studentId, classId])
+  @@index([studentId])
+  @@index([classId])
+}
+
+model TimetableEntry {
+  id              String      @id @default(cuid())
+  classId         String
+  dayOfWeek       Int         // 0 = Monday, 6 = Sunday
+  startTime       String      // "09:00"
+  endTime         String      // "10:30"
+  room            String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  class           Class       @relation(fields: [classId], references: [id])
+
+  @@index([classId])
+  @@index([dayOfWeek])
+}
+
+model Attendance {
+  id              String      @id @default(cuid())
+  studentId       String
+  classId         String
+  date            DateTime    // stored as UTC date
+  status          String      // "PRESENT", "ABSENT", "LATE"
+  markedAt        DateTime    @default(now())
+  markedBy        String?     // facultyId if manually marked
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  student         User        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  class           Class       @relation(fields: [classId], references: [id])
+
+  // Unique constraint: one attendance record per student per class per date
+  @@unique([studentId, classId, date])
+  @@index([studentId])
+  @@index([classId])
+  @@index([date])
+}
+
+model Assignment {
+  id              String      @id @default(cuid())
+  classId         String
+  title           String
+  description     String?
+  dueDate         DateTime    // stored as UTC
+  createdBy       String
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  class           Class       @relation(fields: [classId], references: [id])
+  creator         User        @relation("AssignmentCreatedBy", fields: [createdBy], references: [id])
+  submissions     Submission[]
+
+  @@index([classId])
+  @@index([createdBy])
+  @@index([dueDate])
+}
+
+model Submission {
+  id              String      @id @default(cuid())
+  assignmentId    String
+  studentId       String
+  submittedAt     DateTime    @default(now())
+  grade           String?
+  feedback        String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  assignment      Assignment  @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student         User        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, studentId])
+  @@index([assignmentId])
+  @@index([studentId])
+}
+
+// ============================================================================
+// ANNOUNCEMENT MODELS
+// ============================================================================
+
+model Announcement {
+  id              String      @id @default(cuid())
+  title           String
+  content         String
+  audience        String      // "ALL", "STUDENTS", "FACULTY", "DEPARTMENT:id"
+  departmentId    String?
+  publishedAt     DateTime    @default(now())
+  expiresAt       DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Indexes for full-text search (if using tsvector)
+  @@index([audience])
+  @@index([departmentId])
+  @@index([publishedAt])
+}
+
+// ============================================================================
+// COMPLAINT MODELS
+// ============================================================================
+
+model Complaint {
+  id              String      @id @default(cuid())
+  title           String
+  description     String
+  category        ComplaintCategory
+  status          ComplaintStatus     @default(PENDING)
+  priority        String              @default("NORMAL") // LOW, NORMAL, HIGH
+  location        String?
+  createdBy       String
+  assignedTo      String?             // maintenance staff
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  creator         User        @relation("ComplaintCreatedBy", fields: [createdBy], references: [id])
+  assignee        User?       @relation("ComplaintAssignedTo", fields: [assignedTo], references: [id])
+  comments        ComplaintComment[]
+  attachments     ComplaintAttachment[]
+  auditLogs       AuditLog[]
+
+  @@index([createdBy])
+  @@index([assignedTo])
+  @@index([status])
+  @@index([category])
+  @@index([createdAt])
+}
+
+model ComplaintComment {
+  id              String      @id @default(cuid())
+  complaintId     String
+  userId          String
+  content         String
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  complaint       Complaint   @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  user            User        @relation(fields: [userId], references: [id])
+
+  @@index([complaintId])
+  @@index([userId])
+}
+
+model ComplaintAttachment {
+  id              String      @id @default(cuid())
+  complaintId     String
+  userId          String
+  fileUrl         String      // Cloudinary or S3 URL
+  fileName        String
+  createdAt       DateTime    @default(now())
+
+  // Relations
+  complaint       Complaint   @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  user            User        @relation(fields: [userId], references: [id])
+
+  @@index([complaintId])
+}
+
+// ============================================================================
+// NOTIFICATION MODELS
+// ============================================================================
+
+model Notification {
+  id              String      @id @default(cuid())
+  userId          String
+  type            NotificationType
+  title           String
+  message         String
+  read            Boolean     @default(false)
+  relatedId       String?     // complaintId, assignmentId, etc.
+  relatedType     String?     // "Complaint", "Assignment", etc.
+  auditLogId      String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auditLog        AuditLog?   @relation("NotificationAuditLog", fields: [auditLogId], references: [id])
+
+  @@index([userId])
+  @@index([read])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// CLUB MODELS
+// ============================================================================
+
+model Club {
+  id              String      @id @default(cuid())
+  name            String      @unique
+  description     String?
+  presidentId     String
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  members         ClubMembership[]
+  events          Event[]
+
+  @@index([presidentId])
+}
+
+model ClubMembership {
+  id              String      @id @default(cuid())
+  clubId          String
+  userId          String
+  role            String      @default("MEMBER") // PRESIDENT, VICE_PRESIDENT, MEMBER
+  joinedAt        DateTime    @default(now())
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  club            Club        @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([clubId, userId])
+  @@index([clubId])
+  @@index([userId])
+}
+
+model Event {
+  id              String      @id @default(cuid())
+  clubId          String
+  title           String
+  description     String?
+  startTime       DateTime    // stored as UTC
+  endTime         DateTime    // stored as UTC
+  location        String?
+  status          EventStatus @default(DRAFT)
+  capacity        Int?
+  currentRegistration Int     @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  club            Club        @relation(fields: [clubId], references: [id])
+  registrations   EventRegistration[]
+  attendance      EventAttendance[]
+
+  @@index([clubId])
+  @@index([startTime])
+  @@index([status])
+}
+
+model EventRegistration {
+  id              String      @id @default(cuid())
+  eventId         String
+  userId          String      // student
+  registeredAt    DateTime    @default(now())
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  event           Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  attendance      EventAttendance?
+
+  @@unique([eventId, userId])
+  @@index([eventId])
+}
+
+model EventAttendance {
+  id              String      @id @default(cuid())
+  registrationId  String      @unique
+  checkedInAt     DateTime    @default(now())
+  createdAt       DateTime    @default(now())
+
+  // Relations
+  registration    EventRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  event           Event       @relation(fields: [eventId], references: [id])
+  eventId         String
+
+  @@index([registrationId])
+}
+
+// ============================================================================
+// RESOURCE BOOKING MODELS
+// ============================================================================
+
+model Resource {
+  id              String      @id @default(cuid())
+  name            String
+  description     String?
+  location        String?
+  capacity        Int?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  bookings        Booking[]
+
+  @@index([name])
+}
+
+model Booking {
+  id              String      @id @default(cuid())
+  resourceId      String
+  userId          String
+  startTime       DateTime    // stored as UTC
+  endTime         DateTime    // stored as UTC
+  status          BookingStatus @default(PENDING)
+  notes           String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  resource        Resource    @relation(fields: [resourceId], references: [id])
+  user            User        @relation(fields: [userId], references: [id])
+
+  @@index([resourceId])
+  @@index([userId])
+  @@index([startTime])
+  @@index([status])
+}
+
+// ============================================================================
+// MARKETPLACE & LOST & FOUND MODELS
+// ============================================================================
+
+model MarketplaceListing {
+  id              String      @id @default(cuid())
+  title           String
+  description     String
+  imageUrl        String?     // Cloudinary or S3 URL
+  price           Float?
+  sellerId        String
+  status          String      @default("ACTIVE") // ACTIVE, SOLD, REMOVED
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  seller          User        @relation(fields: [sellerId], references: [id])
+  favorites       MarketplaceFavorite[]
+
+  @@index([sellerId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model MarketplaceFavorite {
+  id              String      @id @default(cuid())
+  listingId       String
+  userId          String
+  createdAt       DateTime    @default(now())
+
+  // Relations
+  listing         MarketplaceListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([listingId, userId])
+  @@index([userId])
+}
+
+model LostItem {
+  id              String      @id @default(cuid())
+  title           String
+  description     String
+  imageUrl        String?
+  location        String
+  foundDate       DateTime
+  reportedBy      String
+  status          String      @default("ACTIVE") // ACTIVE, FOUND, CLOSED
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  reporter        User        @relation(fields: [reportedBy], references: [id])
+
+  @@index([reportedBy])
+  @@index([status])
+  @@index([foundDate])
+}
+
+model FoundItem {
+  id              String      @id @default(cuid())
+  title           String
+  description     String
+  imageUrl        String?
+  location        String
+  foundDate       DateTime
+  foundBy         String
+  status          String      @default("ACTIVE") // ACTIVE, CLAIMED, CLOSED
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  finder          User        @relation(fields: [foundBy], references: [id])
+
+  @@index([foundBy])
+  @@index([status])
+  @@index([foundDate])
+}
+
+// ============================================================================
+// MESSAGING MODELS
+// ============================================================================
+
+model Conversation {
+  id              String      @id @default(cuid())
+  participant1Id  String
+  participant2Id  String
+  lastMessageAt   DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  participant1    User        @relation(fields: [participant1Id], references: [id], onDelete: Cascade)
+  participant2    User        @relation(fields: [participant2Id], references: [id], onDelete: Cascade)
+  messages        Message[]
+
+  @@unique([participant1Id, participant2Id])
+  @@index([participant1Id])
+  @@index([participant2Id])
+}
+
+model Message {
+  id              String      @id @default(cuid())
+  conversationId  String
+  senderId        String
+  content         String
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender          User        @relation(fields: [senderId], references: [id])
+
+  @@index([conversationId])
+  @@index([senderId])
+  @@index([createdAt])
+}
+
+// ============================================================================
+// AUDIT LOG MODEL
+// ============================================================================
+
+model AuditLog {
+  id              String      @id @default(cuid())
+  complaintId     String?
+  action          String      // "STATUS_CHANGE", "ASSIGNMENT", "COMMENT", etc.
+  oldValue        String?
+  newValue        String?
+  createdBy       String
+  createdAt       DateTime    @default(now())
+
+  // Relations
+  complaint       Complaint?  @relation(fields: [complaintId], references: [id], onDelete: SetNull)
+  actor           User        @relation("AuditLogCreatedBy", fields: [createdBy], references: [id])
+  notifications   Notification[] @relation("NotificationAuditLog")
+
+  @@index([complaintId])
+  @@index([createdBy])
+  @@index([createdAt])
+}
